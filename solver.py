@@ -106,14 +106,17 @@ def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None):
             
             # 契約コード以外の割り当て制限
             for s in all_shift_types:
-                if not is_flexible:
-                    # 柔軟シフトフラグが0の人は、自分のシフトコード以外は入れない
+                if int(row.get('日勤専従フラグ', 0)) == 1:
+                    # 旧コードの「波多さんは日勤(A)のみ」の汎用化：常に自分のシフトコード固定
                     if s != contract_shift:
                         model.Add(shifts[(e_idx, d, s)] == 0)
-                else:
-                    # 柔軟シフトフラグが1の人も、平日は基本枠に従う（ただし自身のグループ内なら柔軟）
+                elif not is_flexible:
+                    # 柔軟シフトフラグが0の人：平日のみ自分のシフトコードに固定（土曜は柔軟に日勤に入れる）
                     if not is_sat_day and s != contract_shift:
-                        # 夜勤コアなら夜勤枠の他のシフトには入れる
+                        model.Add(shifts[(e_idx, d, s)] == 0)
+                else:
+                    # 柔軟シフトフラグが1の人：平日は自身のグループ(日/夜)内なら柔軟、土曜も柔軟
+                    if not is_sat_day and s != contract_shift:
                         if is_night_core and (s not in night_shifts):
                             model.Add(shifts[(e_idx, d, s)] == 0)
                         elif not is_night_core and (s not in day_shifts):
