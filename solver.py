@@ -26,6 +26,15 @@ def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None):
     weekday_list = [(start_date + datetime.timedelta(days=d-1)).weekday() for d in range(1, days_in_month + 1)]
 
     # ==========================================
+    # データの前処理（安全な数値化）
+    # ==========================================
+    contracts_df['土曜出勤上限'] = pd.to_numeric(contracts_df.get('土曜出勤上限', 0), errors='coerce').fillna(0)
+    contracts_df['週勤務上限'] = pd.to_numeric(contracts_df.get('週勤務上限', 5), errors='coerce').fillna(5)
+    contracts_df['夜勤コアチームフラグ'] = pd.to_numeric(contracts_df.get('夜勤コアチームフラグ', 0), errors='coerce').fillna(0)
+    contracts_df['日勤専従フラグ'] = pd.to_numeric(contracts_df.get('日勤専従フラグ', 0), errors='coerce').fillna(0)
+    contracts_df['柔軟シフトフラグ'] = pd.to_numeric(contracts_df.get('柔軟シフトフラグ', 0), errors='coerce').fillna(0)
+
+    # ==========================================
     # 数理モデルの構築
     # ==========================================
     model = cp_model.CpModel()
@@ -77,7 +86,7 @@ def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None):
         sat_count = sum(sat_work_vars)
         
         # 土曜出勤上限の適用 (CSVの列データを使用)
-        max_sat = int(row.get('土曜出勤上限', 0))
+        max_sat = int(row['土曜出勤上限'])
         model.Add(sat_count <= max_sat)
 
     # --- C. チーム分けと上限設定 ---
@@ -91,8 +100,8 @@ def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None):
 
     for e_idx, row in contracts_df.iterrows():
         contract_shift = str(row.get('シフトコード', '')).strip()
-        is_night_core = int(row.get('夜勤コアチームフラグ', 0)) == 1
-        is_flexible = int(row.get('柔軟シフトフラグ', 0)) == 1
+        is_night_core = int(row['夜勤コアチームフラグ']) == 1
+        is_flexible = int(row['柔軟シフトフラグ']) == 1
         
         for d in days:
             is_sat_day = weekday_list[d-1] == 5
@@ -106,7 +115,7 @@ def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None):
             
             # 契約コード以外の割り当て制限
             for s in all_shift_types:
-                if int(row.get('日勤専従フラグ', 0)) == 1:
+                if int(row['日勤専従フラグ']) == 1:
                     # 旧コードの「波多さんは日勤(A)のみ」の汎用化：常に自分のシフトコード固定
                     if s != contract_shift:
                         model.Add(shifts[(e_idx, d, s)] == 0)
@@ -123,7 +132,7 @@ def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None):
                             model.Add(shifts[(e_idx, d, s)] == 0)
 
         # 勤務日数上限（週単位）
-        lim = int(row.get('週勤務上限', 5))
+        lim = int(row['週勤務上限'])
         for w in weeks:
             model.Add(sum(shifts[(e_idx, d, s)] for d in w for s in all_shift_types) <= lim)
 

@@ -114,7 +114,41 @@ elif app_mode == "管理者用（シフトの生成）":
             contracts_df = None
 
     if contracts_df is not None:
-        st.markdown("### 2. 現在集まっている希望休")
+        # --- データのプレチェック ---
+        st.markdown("### 2. データの読み取りチェック")
+        
+        # 安全な数値変換
+        contracts_df['土曜出勤上限'] = pd.to_numeric(contracts_df.get('土曜出勤上限', 0), errors='coerce').fillna(0)
+        contracts_df['週勤務上限'] = pd.to_numeric(contracts_df.get('週勤務上限', 5), errors='coerce').fillna(5)
+        contracts_df['夜勤コアチームフラグ'] = pd.to_numeric(contracts_df.get('夜勤コアチームフラグ', 0), errors='coerce').fillna(0)
+        contracts_df['日勤専従フラグ'] = pd.to_numeric(contracts_df.get('日勤専従フラグ', 0), errors='coerce').fillna(0)
+        contracts_df['柔軟シフトフラグ'] = pd.to_numeric(contracts_df.get('柔軟シフトフラグ', 0), errors='coerce').fillna(0)
+
+        total_sat_capacity = contracts_df['土曜出勤上限'].sum()
+        saturdays_count = sum(1 for d in days_list if datetime.date(year, month, d).weekday() == 5)
+        required_sat_shifts = saturdays_count * 2
+        
+        night_core_count = (contracts_df['夜勤コアチームフラグ'] == 1).sum()
+        flexible_count = (contracts_df['柔軟シフトフラグ'] == 1).sum()
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            if total_sat_capacity >= required_sat_shifts:
+                st.success(f"✅ 土曜出勤枠: {int(total_sat_capacity)}枠 (必要: {required_sat_shifts}枠)")
+            else:
+                st.error(f"❌ 土曜出勤枠不足！: {int(total_sat_capacity)}枠 (必要: {required_sat_shifts}枠)")
+        with col2:
+            if night_core_count >= 2:
+                st.success(f"✅ 夜勤コアチーム: {night_core_count}人")
+            else:
+                st.error(f"❌ 夜勤コアチーム不足！: {night_core_count}人 (最低2人は必要)")
+        with col3:
+            st.info(f"ℹ️ 柔軟シフト対応: {flexible_count}人")
+            
+        if total_sat_capacity < required_sat_shifts or night_core_count < 2:
+            st.warning("⚠️ 上記の赤枠の部分が原因でエラー（解なし）になる可能性が非常に高いです。CSVの設定を見直してください。")
+
+        st.markdown("### 3. 現在集まっている希望休")
         requests_data = load_requests()
         if requests_data:
             req_df = pd.DataFrame([{"名前": k, "希望休日": ", ".join(map(str, sorted(v)))} for k, v in requests_data.items() if v])
