@@ -2,7 +2,10 @@ import pandas as pd
 import datetime
 from ortools.sat.python import cp_model
 
-def solve_shift(contracts_df, year, month, holidays_list):
+def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None):
+    if staff_requests is None:
+        staff_requests = {}
+        
     # カレンダー設定
     start_date = datetime.date(year, month, 1)
     
@@ -130,6 +133,15 @@ def solve_shift(contracts_df, year, month, holidays_list):
         # 5連勤禁止
         for d in range(1, days_in_month - 4):
             model.Add(sum(sum(shifts[(e, d + i, s)] for s in all_shift_types) for i in range(6)) <= 5)
+
+    # --- E. 希望休の反映 ---
+    for e_idx, row in contracts_df.iterrows():
+        emp_name = row['従業員名']
+        req_days = staff_requests.get(emp_name, [])
+        for d in req_days:
+            if d in days:
+                for s in all_shift_types:
+                    model.Add(shifts[(e_idx, d, s)] == 0)
 
     # ==========================================
     # 最適化と実行
