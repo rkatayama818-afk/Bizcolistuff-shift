@@ -153,6 +153,56 @@ elif app_mode == "管理者用（シフトの生成）":
         if total_sat_capacity < required_sat_shifts or night_core_count < 2:
             st.warning("⚠️ 上記の赤枠の部分が原因でエラー（解なし）になる可能性が非常に高いです。CSVの設定を見直してください。")
 
+        import unicodedata
+        weekday_day_capacity = 0
+        weekday_night_capacity = 0
+        
+        night_shifts_base = ['L', 'D', 'E', 'H']
+        day_shifts_base = ['N', 'S', 'A', 'B', 'C', 'F', 'G']
+        all_shift_types_base = day_shifts_base + night_shifts_base
+        
+        for e_idx, row in contracts_df.iterrows():
+            contract_shift_raw = str(row.get('シフトコード', '')).strip()
+            contract_shift = unicodedata.normalize('NFKC', contract_shift_raw).upper()
+            
+            is_night_core = int(row['夜勤コアチームフラグ']) == 1
+            is_flexible = int(row['柔軟シフトフラグ']) == 1
+            lim = int(row['週勤務上限'])
+            
+            if contract_shift not in all_shift_types_base:
+                is_flexible = True
+
+            can_day = False
+            can_night = False
+            
+            if is_night_core:
+                if is_flexible or contract_shift in night_shifts_base:
+                    can_night = True
+            else:
+                if is_flexible or contract_shift in day_shifts_base:
+                    can_day = True
+            
+            if can_day: weekday_day_capacity += lim
+            if can_night: weekday_night_capacity += lim
+            
+        weekdays_count = sum(1 for d in days_list if datetime.date(year, month, d).weekday() < 5 and d not in holidays_list)
+        weeks_approx = weekdays_count / 5.0 if weekdays_count > 0 else 1
+        req_night_per_week = (weekdays_count * 2) / weeks_approx if weeks_approx > 0 else 10
+        req_day_per_week = (weekdays_count * 6) / weeks_approx if weeks_approx > 0 else 30
+        
+        st.markdown(f"**【平日シフトの最大キャパシティ確認（週あたり）】**")
+        col4, col5 = st.columns(2)
+        with col4:
+            if weekday_night_capacity >= req_night_per_week:
+                st.success(f"✅ 平日夜勤パワー: {weekday_night_capacity}日/週 (必要: 約{int(req_night_per_week)}日/週)")
+            else:
+                st.error(f"❌ 平日夜勤パワー不足！: {weekday_night_capacity}日/週 (必要: 約{int(req_night_per_week)}日/週)")
+        with col5:
+            if weekday_day_capacity >= req_day_per_week:
+                st.success(f"✅ 平日日勤パワー: {weekday_day_capacity}日/週 (必要: 約{int(req_day_per_week)}日/週)")
+            else:
+                st.error(f"❌ 平日日勤パワー不足！: {weekday_day_capacity}日/週 (必要: 約{int(req_day_per_week)}日/週)")
+
         st.markdown("### 3. 現在集まっている希望休")
         requests_data = load_requests()
         if requests_data:

@@ -1,5 +1,6 @@
 import pandas as pd
 import datetime
+import unicodedata
 from ortools.sat.python import cp_model
 
 def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None):
@@ -18,10 +19,10 @@ def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None):
 
     holidays = holidays_list
 
-    # シフト定義
-    night_shifts = ['L', 'D', 'Ｄ', 'E', 'H', 'Ｈ'] 
-    day_shifts = ['N', 'S', 'A', 'B', 'Ｂ', 'C', 'Ｃ', 'F', 'Ｆ', 'G', 'Ｇ']
-    all_shift_types = list(set(day_shifts + night_shifts))
+    # シフト定義（表記揺れを防ぐため、すべて半角大文字で統一）
+    night_shifts = ['L', 'D', 'E', 'H'] 
+    day_shifts = ['N', 'S', 'A', 'B', 'C', 'F', 'G']
+    all_shift_types = day_shifts + night_shifts
 
     weekday_list = [(start_date + datetime.timedelta(days=d-1)).weekday() for d in range(1, days_in_month + 1)]
 
@@ -104,7 +105,9 @@ def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None):
     if temp_w: weeks.append(temp_w)
 
     for e_idx, row in contracts_df.iterrows():
-        contract_shift = str(row.get('シフトコード', '')).strip()
+        contract_shift_raw = str(row.get('シフトコード', '')).strip()
+        contract_shift = unicodedata.normalize('NFKC', contract_shift_raw).upper()
+        
         is_night_core = int(row['夜勤コアチームフラグ']) == 1
         is_flexible = int(row['柔軟シフトフラグ']) == 1
         
@@ -120,7 +123,14 @@ def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None):
             
             # 契約コード以外の割り当て制限
             for s in all_shift_types:
-                if int(row['日勤専従フラグ']) == 1:
+                if contract_shift not in all_shift_types:
+                    # 【安全装置】無効なコード（空欄など）の場合は、自分のグループ内で柔軟に入れるようにする
+                    if not is_sat_day:
+                        if is_night_core and (s not in night_shifts):
+                            model.Add(shifts[(e_idx, d, s)] == 0)
+                        elif not is_night_core and (s not in day_shifts):
+                            model.Add(shifts[(e_idx, d, s)] == 0)
+                elif int(row['日勤専従フラグ']) == 1:
                     # 旧コードの「波多さんは日勤(A)のみ」の汎用化：常に自分のシフトコード固定
                     if s != contract_shift:
                         model.Add(shifts[(e_idx, d, s)] == 0)
