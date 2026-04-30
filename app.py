@@ -118,11 +118,16 @@ elif app_mode == "管理者用（シフトの生成）":
         st.markdown("### 2. データの読み取りチェック")
         
         # 安全な数値変換
-        contracts_df['土曜出勤上限'] = pd.to_numeric(contracts_df.get('土曜出勤上限', 0), errors='coerce').fillna(0)
-        contracts_df['週勤務上限'] = pd.to_numeric(contracts_df.get('週勤務上限', 5), errors='coerce').fillna(5)
-        contracts_df['夜勤コアチームフラグ'] = pd.to_numeric(contracts_df.get('夜勤コアチームフラグ', 0), errors='coerce').fillna(0)
-        contracts_df['日勤専従フラグ'] = pd.to_numeric(contracts_df.get('日勤専従フラグ', 0), errors='coerce').fillna(0)
-        contracts_df['柔軟シフトフラグ'] = pd.to_numeric(contracts_df.get('柔軟シフトフラグ', 0), errors='coerce').fillna(0)
+        def safe_numeric(df, col, default=0):
+            if col not in df.columns:
+                df[col] = default
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(default)
+
+        safe_numeric(contracts_df, '土曜出勤上限', 0)
+        safe_numeric(contracts_df, '週勤務上限', 5)
+        safe_numeric(contracts_df, '夜勤コアチームフラグ', 0)
+        safe_numeric(contracts_df, '日勤専従フラグ', 0)
+        safe_numeric(contracts_df, '柔軟シフトフラグ', 0)
 
         total_sat_capacity = contracts_df['土曜出勤上限'].sum()
         saturdays_count = sum(1 for d in days_list if datetime.date(year, month, d).weekday() == 5)
