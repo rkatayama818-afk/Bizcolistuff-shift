@@ -3,9 +3,11 @@ import datetime
 import unicodedata
 from ortools.sat.python import cp_model
 
-def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None):
+def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None, event_days=None):
     if staff_requests is None:
         staff_requests = {}
+    if event_days is None:
+        event_days = []
         
     # カレンダー設定
     start_date = datetime.date(year, month, 1)
@@ -58,6 +60,7 @@ def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None):
     idx_kamimura = get_emp_idx('上村')
     idx_kondo    = get_emp_idx('近藤')
     idx_taniguchi= get_emp_idx('谷口')
+    idx_muta     = get_emp_idx('牟田')
 
     # ==========================================
     # 数理モデルの構築
@@ -90,13 +93,17 @@ def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None):
                 model.Add(sum(shifts[(e, d, s)] for s in all_shift_types) <= 1)
 
             if is_sat:
-                # 土曜：日勤2名、夜勤0名
+                # 土曜：日勤　6名、夢勤0名
                 model.Add(sum(shifts[(e, d, s)] for e in employees for s in day_shifts) == 2)
                 model.Add(sum(shifts[(e, d, s)] for e in employees for s in night_shifts) == 0)
             else:
-                # 平日：夜勤2名、日勤最大化（最低6名確保）
+                # 平日：夜勤2名、日勤がイベント日に応じて最低5名または6名を確保
                 model.Add(sum(shifts[(e, d, s)] for e in employees for s in night_shifts) == 2)
-                model.Add(sum(shifts[(e, d, s)] for e in employees for s in day_shifts) >= 6)
+                if d in event_days:
+                    # イベント日は昼番最低5名に緩和
+                    model.Add(sum(shifts[(e, d, s)] for e in employees for s in day_shifts) >= 5)
+                else:
+                    model.Add(sum(shifts[(e, d, s)] for e in employees for s in day_shifts) >= 6)
 
     # --- B. 土曜日の個別制限と公平性 ---
     saturdays = [d for d in days if weekday_list[d-1] == 5]
@@ -253,6 +260,18 @@ def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None):
             if d in days:
                 for s in all_shift_types:
                     model.Add(shifts[(e_idx, d, s)] == 0)
+
+    # --- G. イベント日の制約 ---
+    # イベント日は牟田さんと谷口さんが必ず遅番（L）に入る
+    for d in event_days:
+        if d not in days or d in holidays or weekday_list[d-1] == 5:
+            continue  # 期間外・休館日・土曜はスキップ
+        # 牟田さんをLに固定
+        if idx_muta is not None:
+            model.Add(shifts[(idx_muta, d, 'L')] == 1)
+        # 谷口さんをLに固定
+        if idx_taniguchi is not None:
+            model.Add(shifts[(idx_taniguchi, d, 'L')] == 1)
 
     # ==========================================
     # 最適化と実行
