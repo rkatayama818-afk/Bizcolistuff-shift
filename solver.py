@@ -23,6 +23,8 @@ def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None):
     night_shifts = ['L', 'D', 'E', 'H'] 
     day_shifts = ['N', 'S', 'A', 'B', 'C', 'F', 'G']
     all_shift_types = day_shifts + night_shifts
+    # 「金曜遅番」として扱うコード（L が遅番＝夜勤コード）
+    late_shift_codes = ['L']
 
     weekday_list = [(start_date + datetime.timedelta(days=d-1)).weekday() for d in range(1, days_in_month + 1)]
 
@@ -39,6 +41,23 @@ def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None):
     safe_numeric(contracts_df, '夜勤コアチームフラグ', 0)
     safe_numeric(contracts_df, '日勤専従フラグ', 0)
     safe_numeric(contracts_df, '柔軟シフトフラグ', 0)
+
+    # ==========================================
+    # 特定スタッフのインデックスを名前で取得するヘルパー
+    # ==========================================
+    def get_emp_idx(name_keyword):
+        """従業員名に name_keyword を含む行のインデックスを返す（見つからなければ None）"""
+        for idx, row in contracts_df.iterrows():
+            if name_keyword in str(row.get('従業員名', '')):
+                return idx
+        return None
+
+    idx_kamata   = get_emp_idx('鎌田')
+    idx_nakamine = get_emp_idx('仲嶺')
+    idx_mizumoto = get_emp_idx('水元')
+    idx_kamimura = get_emp_idx('上村')
+    idx_kondo    = get_emp_idx('近藤')
+    idx_taniguchi= get_emp_idx('谷口')
 
     # ==========================================
     # 数理モデルの構築
@@ -81,6 +100,8 @@ def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None):
 
     # --- B. 土曜日の個別制限と公平性 ---
     saturdays = [d for d in days if weekday_list[d-1] == 5]
+    num_saturdays = len(saturdays)
+
     for e_idx, row in contracts_df.iterrows():
         sat_work_vars = [sum(shifts[(e_idx, d, s)] for s in all_shift_types) for d in saturdays]
         
@@ -92,8 +113,12 @@ def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None):
         sat_count = sum(sat_work_vars)
         
         # 土曜出勤上限の適用 (CSVの列データを使用)
-        max_sat = int(row['土曜出勤上限'])
-        model.Add(sat_count <= max_sat)
+        # ★ 仲嶺さんは5週の月だけ最大3回に引き上げ
+        if e_idx == idx_nakamine and num_saturdays >= 5:
+            model.Add(sat_count <= 3)
+        else:
+            max_sat = int(row['土曜出勤上限'])
+            model.Add(sat_count <= max_sat)
 
     # --- C. チーム分けと上限設定 ---
     weeks = []
@@ -151,7 +176,7 @@ def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None):
         for w in weeks:
             model.Add(sum(shifts[(e_idx, d, s)] for d in w for s in all_shift_types) <= lim)
 
-    # --- D. 禁止ルール ---
+    # --- D. 禁止ルール（既存） ---
     for e in employees:
         for d in range(1, days_in_month):
             # L翌日の制限 (A, N を禁止)
@@ -160,6 +185,65 @@ def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None):
         # 5連勤禁止
         for d in range(1, days_in_month - 4):
             model.Add(sum(sum(shifts[(e, d + i, s)] for s in all_shift_types) for i in range(6)) <= 5)
+
+    # ==========================================
+    # --- F. 新規ビジネスルール ---
+    # ==========================================
+
+    # F-1: 金曜遅番（Lシフト）翌日の土曜出勤禁止（全スタッフ）
+    for d in range(1, days_in_month + 1):
+        if weekday_list[d-1] == 4:  # 金曜
+            next_d = d + 1
+            if next_d <= days_in_month and weekday_list[next_d - 1] == 5:  # 翌日が土曜
+                for e in employees:
+                    for late_s in late_shift_codes:
+                        if late_s in all_shift_types:
+                            # 金曜にLを入っている場合、翌土曜は全シフト禁止
+                            for s in all_shift_types:
+                                model.Add(shifts[(e, next_d, s)] == 0).OnlyEnforceIf(shifts[(e, d, late_s)])
+
+    # F-2: 鎌田さんは月曜出勤不可
+    if idx_kamata is not None:
+        for d in days:
+            if weekday_list[d-1] == 0:  # 月曜
+                for s in all_shift_types:
+                    model.Add(shifts[(idx_kamata, d, s)] == 0)
+
+    # F-3: 仲嶺さんは火曜出勤不可
+    if idx_nakamine is not None:
+        for d in days:
+            if weekday_list[d-1] == 1:  # 火曜
+                for s in all_shift_types:
+                    model.Add(shifts[(idx_nakamine, d, s)] == 0)
+
+    # F-4: 水元さんが休みの日 → 鎌田さんは必ず夜勤出勤、かつコンビは上村か仲嶺
+    # 「水元さん不在」= 水元さんがその日どのシフトにも入っていない
+    if idx_mizumoto is not None and idx_kamata is not None:
+        for d in days:
+            if d in holidays or weekday_list[d-1] == 5:
+                continue  # 休館日・土曜はスキップ（夜勤がない日）
+            
+            # 水元が休みかどうかの変数
+            mizumoto_absent = model.NewBoolVar(f'mizumoto_absent_d{d}')
+            mizumoto_works = sum(shifts[(idx_mizumoto, d, s)] for s in all_shift_types)
+            # mizumoto_absent = 1 ⟺ mizumoto_works == 0
+            model.Add(mizumoto_works == 0).OnlyEnforceIf(mizumoto_absent)
+            model.Add(mizumoto_works >= 1).OnlyEnforceIf(mizumoto_absent.Not())
+
+            # 水元が休みのとき: 鎌田は夜勤に必ず入る
+            kamata_night = sum(shifts[(idx_kamata, d, s)] for s in night_shifts)
+            model.Add(kamata_night == 1).OnlyEnforceIf(mizumoto_absent)
+
+            # 水元が休みのとき: コンビ（もう1人の夜勤）は上村か仲嶺でなければならない
+            # = 上村 or 仲嶺 のどちらかが夜勤に入っている
+            partners = []
+            if idx_kamimura is not None:
+                partners.append(sum(shifts[(idx_kamimura, d, s)] for s in night_shifts))
+            if idx_nakamine is not None:
+                partners.append(sum(shifts[(idx_nakamine, d, s)] for s in night_shifts))
+            if partners:
+                partner_sum = sum(partners)
+                model.Add(partner_sum >= 1).OnlyEnforceIf(mizumoto_absent)
 
     # --- E. 希望休の反映 ---
     for e_idx, row in contracts_df.iterrows():
@@ -172,9 +256,26 @@ def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None):
 
     # ==========================================
     # 最適化と実行
+    # F-5: 土曜2回目は近藤さん優先、次に谷口さん（ソフト制約：目的関数のボーナス）
     # ==========================================
-    # 日勤リソースの最大化
-    model.Maximize(sum(shifts[(e, d, s)] for e in employees for d in days for s in all_shift_types))
+    # ベース：全シフト数の最大化
+    base_obj = sum(shifts[(e, d, s)] for e in employees for d in days for s in all_shift_types)
+
+    # 土曜のインデックス（0始まり）から「2回目の土曜」を特定
+    sat_bonus_terms = []
+    if len(saturdays) >= 2:
+        sat2 = saturdays[1]  # 2回目の土曜
+        if idx_kondo is not None:
+            kondo_sat2 = sum(shifts[(idx_kondo, sat2, s)] for s in all_shift_types)
+            # 近藤さんに最高優先度ボーナス（大きなウェイトを掛ける）
+            sat_bonus_terms.append(kondo_sat2 * 100)
+        if idx_taniguchi is not None:
+            taniguchi_sat2 = sum(shifts[(idx_taniguchi, sat2, s)] for s in all_shift_types)
+            # 谷口さんに次点ボーナス
+            sat_bonus_terms.append(taniguchi_sat2 * 50)
+
+    bonus_obj = sum(sat_bonus_terms) if sat_bonus_terms else 0
+    model.Maximize(base_obj + bonus_obj)
 
     solver = cp_model.CpSolver()
     status = solver.Solve(model)

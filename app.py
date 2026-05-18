@@ -4,13 +4,19 @@ import datetime
 import json
 import os
 from io import BytesIO
-from solver import solve_shift
 
-# Constants
+# 重いライブラリ(solver, ortools)は起動時ではなく実行時にインポートすることで画面表示を高速化します# Constants
 REQUESTS_FILE = "requests.json"
 CONTRACTS_FILE = "current_contracts.csv"
 
-st.set_page_config(page_title="シフト自動生成アプリ", layout="wide")
+st.set_page_config(page_title="シフト自動生成アプリ", layout="centered", initial_sidebar_state="collapsed")
+
+# 契約データの読み込みをキャッシュして高速化
+@st.cache_data(ttl=300)
+def load_contracts_for_staff():
+    if os.path.exists(CONTRACTS_FILE):
+        return pd.read_csv(CONTRACTS_FILE, encoding='utf-8')
+    return None
 
 # Helper to load requests
 def load_requests():
@@ -48,10 +54,10 @@ days_list = list(range(1, days_in_month + 1))
 if app_mode == "スタッフ用（希望休の入力）":
     st.header("🏖️ 希望休の入力")
     
-    if not os.path.exists(CONTRACTS_FILE):
+    df = load_contracts_for_staff()
+    if df is None:
         st.warning("管理者がまだ今月の契約条件データをアップロードしていません。店長にお問い合わせください。")
     else:
-        df = pd.read_csv(CONTRACTS_FILE, encoding='utf-8')
         staff_names = df['従業員名'].tolist()
         
         st.write(f"**{year}年{month}月** の希望休を入力してください。")
@@ -100,6 +106,7 @@ elif app_mode == "管理者用（シフトの生成）":
             
             # Save for staff mode
             contracts_df.to_csv(CONTRACTS_FILE, index=False, encoding='utf-8')
+            load_contracts_for_staff.clear() # キャッシュをクリアして最新を反映
             st.success("CSVを読み込み、スタッフ用画面に名簿を反映しました。")
             
         except Exception as e:
@@ -216,6 +223,7 @@ elif app_mode == "管理者用（シフトの生成）":
             
         if st.button("✨ シフトを自動生成する", type="primary"):
             with st.spinner("最適化エンジンがシフトを計算中です..."):
+                from solver import solve_shift # 実行時のみロード
                 success, df_output, output_filename = solve_shift(contracts_df, year, month, holidays_list, requests_data)
                 
                 if success:
