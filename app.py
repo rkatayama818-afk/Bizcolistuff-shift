@@ -91,6 +91,21 @@ elif app_mode == "管理者用（シフトの生成）":
         except:
             st.sidebar.error("数字とカンマだけで入力してください")
 
+    st.sidebar.markdown("---")
+    st.sidebar.header("🎉 イベント日設定")
+    st.sidebar.caption("業後にイベントがある日を入力してください（最大3回/月）")
+    events_str = st.sidebar.text_input("イベントの日にち (例: 10,20,25)", "")
+    events_list = []
+    if events_str:
+        try:
+            events_list = [int(x.strip()) for x in events_str.split(',') if x.strip()]
+            if len(events_list) > 3:
+                st.sidebar.warning("イベントは月3回以内が基本です。")
+            else:
+                st.sidebar.success(f"イベント日: {', '.join(str(d)+'日' for d in events_list)}")
+        except:
+            st.sidebar.error("数字とカンマだけで入力してください")
+
     st.header("⚙️ シフトの生成")
     st.markdown("### 1. 契約条件データのアップロード")
     
@@ -221,10 +236,17 @@ elif app_mode == "管理者用（シフトの生成）":
         else:
             st.write("まだ誰からも希望休が提出されていません。")
             
+        # イベント日の説明表示
+        if events_list:
+            st.info(f"🎉 イベント日 ({', '.join(str(d)+'日' for d in events_list)}) は昼番5名・牟田さん＆谷口さんが遅番に固定されます。")
+
         if st.button("✨ シフトを自動生成する", type="primary"):
             with st.spinner("最適化エンジンがシフトを計算中です..."):
                 from solver import solve_shift # 実行時のみロード
-                success, df_output, output_filename = solve_shift(contracts_df, year, month, holidays_list, requests_data)
+                success, df_output, output_filename = solve_shift(
+                    contracts_df, year, month, holidays_list, requests_data,
+                    event_days=events_list
+                )
                 
                 if success:
                     st.success("✅ シフトの生成に成功しました！")
