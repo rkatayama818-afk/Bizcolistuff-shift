@@ -77,6 +77,19 @@ def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None, e
                 shifts[(e, d, s)] = model.NewBoolVar(f'shift_e{e}_d{d}_s{s}')
 
     # ==========================================
+    # 【事前計算】水元さんの不在フラグ（A節・F-4で共有）
+    # ==========================================
+    mizumoto_absent_vars = {}
+    if idx_mizumoto is not None:
+        for d in days:
+            if d not in holidays and weekday_list[d-1] < 5:  # 開館平日のみ
+                mav = model.NewBoolVar(f'mizumoto_absent_d{d}')
+                mw = sum(shifts[(idx_mizumoto, d, s)] for s in all_shift_types)
+                model.Add(mw == 0).OnlyEnforceIf(mav)
+                model.Add(mw >= 1).OnlyEnforceIf(mav.Not())
+                mizumoto_absent_vars[d] = mav
+
+    # ==========================================
     # 制約条件の追加
     # ==========================================
 
@@ -84,6 +97,7 @@ def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None, e
     for d in days:
         is_holiday = d in holidays
         is_sat = weekday_list[d-1] == 5
+        is_mon = weekday_list[d-1] == 0
 
         if is_holiday:
             for e in employees:
@@ -97,14 +111,19 @@ def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None, e
                 model.Add(sum(shifts[(e, d, s)] for e in employees for s in day_shifts) == 2)
                 model.Add(sum(shifts[(e, d, s)] for e in employees for s in night_shifts) == 0)
             else:
-                # 平日：夜勤2名、日勤は最低5名（平均5.5名を目安にエンジンが自動調整）
-                model.Add(sum(shifts[(e, d, s)] for e in employees for s in night_shifts) == 2)
+                # 平日：夜勤人数（月曜かつ水元不在の場合は1名体制、それ以外は2名）
+                night_sum = sum(shifts[(e, d, s)] for e in employees for s in night_shifts)
+                if is_mon and d in mizumoto_absent_vars:
+                    mav = mizumoto_absent_vars[d]
+                    model.Add(night_sum == 1).OnlyEnforceIf(mav)      # 水元不在→1名体制
+                    model.Add(night_sum == 2).OnlyEnforceIf(mav.Not()) # 水元出勤→通常2名
+                else:
+                    model.Add(night_sum == 2)  # 通常平日は2名
+
                 day_shift_sum = sum(shifts[(e, d, s)] for e in employees for s in day_shifts)
                 if d in event_days:
-                    # イベント日は確実に昼番5名
                     model.Add(day_shift_sum == 5)
                 else:
-                    # 通常平日：最低5名（上限なし、最適化が自動でできるだけ多くを割り当てる）
                     model.Add(day_shift_sum >= 5)
 
     # --- B. 土曜日の個別制限と公平性 ---
@@ -225,34 +244,33 @@ def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None, e
                 for s in all_shift_types:
                     model.Add(shifts[(idx_nakamine, d, s)] == 0)
 
-    # F-4: 水元さんが休みの日 → 鎌田さんは必ず夜勤出勤、かつコンビは上村か仲嶺
-    # 「水元さん不在」= 水元さんがその日どのシフトにも入っていない
-    if idx_mizumoto is not None and idx_kamata is not None:
+    # F-4: 水元さんが休みの日の夜勤ルール（事前計算済みの mizumoto_absent_vars を使用）
+    # ・月曜以外：鎌田さんが必ず夜勤に入る＋もう1人は仲嶺か上村
+    # ・月曜日  ：鎌田さんは出勤不可（F-2）＋夜勤1名体制（A節で制御済み）
+    #             → 夜勤コアチームのうち1名をシステムが自動選択
+    if idx_kamata is not None:
         for d in days:
             if d in holidays or weekday_list[d-1] == 5:
-                continue  # 休館日・土曜はスキップ（夜勤がない日）
-            
-            # 水元が休みかどうかの変数
-            mizumoto_absent = model.NewBoolVar(f'mizumoto_absent_d{d}')
-            mizumoto_works = sum(shifts[(idx_mizumoto, d, s)] for s in all_shift_types)
-            # mizumoto_absent = 1 ⟺ mizumoto_works == 0
-            model.Add(mizumoto_works == 0).OnlyEnforceIf(mizumoto_absent)
-            model.Add(mizumoto_works >= 1).OnlyEnforceIf(mizumoto_absent.Not())
+                continue
+            if d not in mizumoto_absent_vars:
+                continue
 
-            # 水元が休みのとき: 鎌田は夜勤に必ず入る
-            kamata_night = sum(shifts[(idx_kamata, d, s)] for s in night_shifts)
-            model.Add(kamata_night == 1).OnlyEnforceIf(mizumoto_absent)
+            mizumoto_absent = mizumoto_absent_vars[d]  # 事前計算済み変数を再利用
 
-            # 水元が休みのとき: コンビ（もう1人の夜勤）は上村か仲嶺でなければならない
-            # = 上村 or 仲嶺 のどちらかが夜勤に入っている
-            partners = []
-            if idx_kamimura is not None:
-                partners.append(sum(shifts[(idx_kamimura, d, s)] for s in night_shifts))
-            if idx_nakamine is not None:
-                partners.append(sum(shifts[(idx_nakamine, d, s)] for s in night_shifts))
-            if partners:
-                partner_sum = sum(partners)
-                model.Add(partner_sum >= 1).OnlyEnforceIf(mizumoto_absent)
+            if weekday_list[d-1] != 0:  # 月曜以外
+                # 鎌田が必ず夜勤に入る
+                kamata_night = sum(shifts[(idx_kamata, d, s)] for s in night_shifts)
+                model.Add(kamata_night == 1).OnlyEnforceIf(mizumoto_absent)
+                # もう1人は仲嶺か上村のどちらか
+                partners = []
+                if idx_kamimura is not None:
+                    partners.append(sum(shifts[(idx_kamimura, d, s)] for s in night_shifts))
+                if idx_nakamine is not None:
+                    partners.append(sum(shifts[(idx_nakamine, d, s)] for s in night_shifts))
+                if partners:
+                    model.Add(sum(partners) >= 1).OnlyEnforceIf(mizumoto_absent)
+            # 月曜日：A節で「水元不在→夜勤1名」が設定済み。
+            # 夜勤コアチームフラグにより、夜勤メンバーの中からシステムが自動選択する。
 
     # --- E. 希望休の反映 ---
     for e_idx, row in contracts_df.iterrows():
