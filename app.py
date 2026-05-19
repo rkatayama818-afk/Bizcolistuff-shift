@@ -80,6 +80,28 @@ if app_mode == "スタッフ用（希望休の入力）":
                 save_requests(requests_data)
                 st.success(f"{selected_name} さんの希望休を保存しました！")
 
+    st.markdown("---")
+    st.header("📅 決定済みシフト表")
+    if os.path.exists("latest_shift.csv"):
+        try:
+            latest_shift_df = pd.read_csv("latest_shift.csv", index_col=0, encoding="utf-8-sig")
+            st.dataframe(latest_shift_df)
+            
+            # Excelダウンロードボタンもスタッフに提供
+            output = BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                latest_shift_df.to_excel(writer, sheet_name='シフト表')
+            st.download_button(
+                label="📥 Excelファイルをダウンロード",
+                data=output.getvalue(),
+                file_name="latest_shift.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        except Exception as e:
+            st.warning("シフト表の読み込みに失敗しました。")
+    else:
+        st.info("シフトはまだ公開されていません。")
+
 elif app_mode == "管理者用（シフトの生成）":
     st.sidebar.markdown("---")
     st.sidebar.header("休館日設定")
@@ -264,7 +286,10 @@ elif app_mode == "管理者用（シフトの生成）":
                 )
                 
                 if success:
-                    st.success("✅ シフトの生成に成功しました！")
+                    # 最新のシフトを保存 (スタッフ用画面で表示するため)
+                    df_output.to_csv("latest_shift.csv", encoding="utf-8-sig")
+                    
+                    st.success("✅ シフトの生成に成功しました！スタッフ用画面にも自動で公開されました。")
                     st.dataframe(df_output)
                     
                     output = BytesIO()
