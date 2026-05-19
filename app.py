@@ -210,7 +210,7 @@ elif app_mode == "管理者用（シフトの生成）":
         weekdays_count = sum(1 for d in days_list if datetime.date(year, month, d).weekday() < 5 and d not in holidays_list)
         weeks_approx = weekdays_count / 5.0 if weekdays_count > 0 else 1
         req_night_per_week = (weekdays_count * 2) / weeks_approx if weeks_approx > 0 else 10
-        req_day_per_week = (weekdays_count * 6) / weeks_approx if weeks_approx > 0 else 30
+        req_day_per_week = (weekdays_count * 5.5) / weeks_approx if weeks_approx > 0 else 27.5
         
         st.markdown(f"**【平日シフトの最大キャパシティ確認（週あたり）】**")
         col4, col5 = st.columns(2)

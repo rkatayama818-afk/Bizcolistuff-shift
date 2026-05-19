@@ -93,17 +93,26 @@ def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None, e
                 model.Add(sum(shifts[(e, d, s)] for s in all_shift_types) <= 1)
 
             if is_sat:
-                # 土曜：日勤　6名、夢勤0名
+                # 土曜：日勤2名、夜勤0名
                 model.Add(sum(shifts[(e, d, s)] for e in employees for s in day_shifts) == 2)
                 model.Add(sum(shifts[(e, d, s)] for e in employees for s in night_shifts) == 0)
             else:
-                # 平日：夜勤2名、日勤がイベント日に応じて最低5名または6名を確保
+                # 平日：夜勤2名、日勤は5名または6名（1ヶ月平均5.5名になるように全体で調整）
                 model.Add(sum(shifts[(e, d, s)] for e in employees for s in night_shifts) == 2)
+                day_shift_sum = sum(shifts[(e, d, s)] for e in employees for s in day_shifts)
                 if d in event_days:
-                    # イベント日は昼番最低5名に緩和
-                    model.Add(sum(shifts[(e, d, s)] for e in employees for s in day_shifts) >= 5)
+                    # イベント日は確実に昼番5名
+                    model.Add(day_shift_sum == 5)
                 else:
-                    model.Add(sum(shifts[(e, d, s)] for e in employees for s in day_shifts) >= 6)
+                    model.Add(day_shift_sum >= 5)
+                    model.Add(day_shift_sum <= 6)
+
+    # --- A-2. 1ヶ月平均5.5名の制約 ---
+    # 平日（休館日と土日を除く）の日勤合計が「平日日数 × 5.5」になるようにする
+    weekdays = [d for d in days if d not in holidays and weekday_list[d-1] < 5]
+    if weekdays:
+        target_total_day_shifts = int(round(5.5 * len(weekdays)))
+        model.Add(sum(shifts[(e, d, s)] for e in employees for d in weekdays for s in day_shifts) == target_total_day_shifts)
 
     # --- B. 土曜日の個別制限と公平性 ---
     saturdays = [d for d in days if weekday_list[d-1] == 5]
