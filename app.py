@@ -139,6 +139,10 @@ elif app_mode == "管理者用（シフトの生成）":
         # --- データのプレチェック ---
         st.markdown("### 2. データの読み取りチェック")
         
+        # 週契約日数 を 週勤務上限 にマッピング（互換性担保）
+        if '週契約日数' in contracts_df.columns and '週勤務上限' not in contracts_df.columns:
+            contracts_df['週勤務上限'] = contracts_df['週契約日数']
+
         # 安全な数値変換
         def safe_numeric(df, col, default=0):
             if col not in df.columns:
@@ -150,6 +154,14 @@ elif app_mode == "管理者用（シフトの生成）":
         safe_numeric(contracts_df, '夜勤コアチームフラグ', 0)
         safe_numeric(contracts_df, '日勤専従フラグ', 0)
         safe_numeric(contracts_df, '柔軟シフトフラグ', 0)
+
+        # 夜勤コアと日勤専従の矛盾チェック（自動で日勤専従を優先して夜勤コアを0扱いにする）
+        conflict_staff = []
+        for idx, row in contracts_df.iterrows():
+            if int(row['夜勤コアチームフラグ']) == 1 and int(row['日勤専従フラグ']) == 1:
+                conflict_staff.append(row['従業員名'])
+                # 矛盾を解消（日勤専従を優先）
+                contracts_df.at[idx, '夜勤コアチームフラグ'] = 0
 
         total_sat_capacity = contracts_df['土曜出勤上限'].sum()
         saturdays_count = sum(1 for d in days_list if datetime.date(year, month, d).weekday() == 5)
@@ -174,6 +186,9 @@ elif app_mode == "管理者用（シフトの生成）":
             
         if total_sat_capacity < required_sat_shifts or night_core_count < 2:
             st.warning("⚠️ 上記の赤枠の部分が原因でエラー（解なし）になる可能性が非常に高いです。CSVの設定を見直してください。")
+
+        if conflict_staff:
+            st.warning(f"⚠️ **設定競合の警告**: {', '.join(conflict_staff)} さんは「夜勤コア」と「日勤専従」の両方のフラグが1になっています。平日の勤務が不可能になるため、システム側で一時的に「夜勤コア」を0として扱います。契約条件CSVファイルを見直してください。")
 
         import unicodedata
         weekday_day_capacity = 0

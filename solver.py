@@ -33,6 +33,10 @@ def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None, e
     # ==========================================
     # データの前処理（安全な数値化）
     # ==========================================
+    # 週契約日数 を 週勤務上限 にマッピング（互換性担保）
+    if '週契約日数' in contracts_df.columns and '週勤務上限' not in contracts_df.columns:
+        contracts_df['週勤務上限'] = contracts_df['週契約日数']
+
     def safe_numeric(df, col, default=0):
         if col not in df.columns:
             df[col] = default
@@ -43,6 +47,11 @@ def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None, e
     safe_numeric(contracts_df, '夜勤コアチームフラグ', 0)
     safe_numeric(contracts_df, '日勤専従フラグ', 0)
     safe_numeric(contracts_df, '柔軟シフトフラグ', 0)
+
+    # 夜勤コアと日勤専従の矛盾を解消（日勤専従を優先して夜勤コアチームから除外する）
+    for idx, row in contracts_df.iterrows():
+        if int(row['夜勤コアチームフラグ']) == 1 and int(row['日勤専従フラグ']) == 1:
+            contracts_df.at[idx, '夜勤コアチームフラグ'] = 0
 
     # ==========================================
     # 特定スタッフのインデックスを名前で取得するヘルパー
