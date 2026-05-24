@@ -304,10 +304,24 @@ def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None, e
 
     # ==========================================
     # 最適化と実行
-    # F-5: 土曜2回目は近藤さん優先、次に谷口さん（ソフト制約：目的関数のボーナス）
+    # F-5: 土曜2回目は近藤さん優先、次に谷口さん（ソフト制約）
+    # F-6: 公平性（週勤務上限に達していない人を最優先でシフトに入れる）
     # ==========================================
-    # ベース：全シフト数の最大化
-    base_obj = sum(shifts[(e, d, s)] for e in employees for d in days for s in all_shift_types)
+    # ベース：全シフト数の最大化（1シフトあたり10点）
+    base_obj = sum(shifts[(e, d, s)] for e in employees for d in days for s in all_shift_types) * 10
+
+    # 公平性の計算：各スタッフの週ごとの「不足シフト数」を計算
+    shortfall_vars = []
+    max_shortfall = model.NewIntVar(0, 7, 'max_shortfall')
+    for e_idx, row in contracts_df.iterrows():
+        lim = int(row['週勤務上限'])
+        for w in weeks:
+            week_shifts = sum(shifts[(e_idx, d, s)] for d in w for s in all_shift_types)
+            shortfall = model.NewIntVar(0, 7, f'shortfall_{e_idx}_{w[0]}')
+            model.Add(shortfall >= lim - week_shifts)
+            shortfall_vars.append(shortfall)
+            # 全員の中で一番シフトが足りていない人の不足数を特定
+            model.Add(max_shortfall >= shortfall)
 
     # 土曜のインデックス（0始まり）から「2回目の土曜」を特定
     sat_bonus_terms = []
@@ -315,15 +329,16 @@ def solve_shift(contracts_df, year, month, holidays_list, staff_requests=None, e
         sat2 = saturdays[1]  # 2回目の土曜
         if idx_kondo is not None:
             kondo_sat2 = sum(shifts[(idx_kondo, sat2, s)] for s in all_shift_types)
-            # 近藤さんに最高優先度ボーナス（大きなウェイトを掛ける）
             sat_bonus_terms.append(kondo_sat2 * 100)
         if idx_taniguchi is not None:
             taniguchi_sat2 = sum(shifts[(idx_taniguchi, sat2, s)] for s in all_shift_types)
-            # 谷口さんに次点ボーナス
             sat_bonus_terms.append(taniguchi_sat2 * 50)
 
     bonus_obj = sum(sat_bonus_terms) if sat_bonus_terms else 0
-    model.Maximize(base_obj + bonus_obj)
+    
+    # 目的関数：シフト総数を最大化しつつ、不足シフトの最大値と合計を強力にペナルティ（最小化）する
+    fairness_penalty = (max_shortfall * 1000) + (sum(shortfall_vars) * 50)
+    model.Maximize(base_obj + bonus_obj - fairness_penalty)
 
     solver = cp_model.CpSolver()
     status = solver.Solve(model)
